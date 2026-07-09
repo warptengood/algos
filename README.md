@@ -3,5 +3,6 @@ Data Structures and Algorithms implemented from scratch in Python for my persona
 
 ## Data Structures
  - Binary Heap
-
+ - Red-Black Tree
+ 
 ## Algorithms
