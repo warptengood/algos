@@ -1,175 +1,266 @@
-"""
-1. Every node is either black or red.
-2. The root is always black.
-3. Every `None` (leaf) node is black.
-4. Red nodes cannot be adjacent.
-5. Every path from a node to a leaf must contain the same number of black nodes.
-"""
+from __future__ import annotations
+
+from enum import Enum, auto
+from typing import Generic, Iterable, Iterator, Protocol, TypeVar
 
 
-class Node:
-    def __init__(self, key: int, parent: Node | None = None) -> None:
+class Comparable(Protocol):
+    def __lt__(self, other: object, /) -> bool: ...
+
+
+T = TypeVar("T", bound=Comparable)
+
+
+class Color(Enum):
+    RED = auto()
+    BLACK = auto()
+
+
+class Node(Generic[T]):
+    __slots__ = ("key", "color", "parent", "left", "right")
+
+    def __init__(
+        self,
+        key: T,
+        color: Color,
+        parent: Node[T],
+        left: Node[T],
+        right: Node[T],
+    ) -> None:
         self.key = key
-        # False - Red, True - Black
-        self.color = False
-        self.parent: Node | None = parent
-        self.left: Node | None = None
-        self.right: Node | None = None
+        self.color = color
+        self.parent = parent
+        self.left = left
+        self.right = right
 
-class RedBlackTree:
-    def __init__(self):
-        self._root: Node = None
 
-    def _insert(self, cur_node: Node | None, parent: Node | None, new_node: Node) -> Node:
-        if cur_node is None:
-            cur_node = new_node
-            cur_node.parent = parent
-            return cur_node
-        if cur_node.key < new_node.key:
-            cur_node.right = self._insert(cur_node.right, cur_node, new_node)
-        elif cur_node.key > new_node.key:
-            cur_node.left = self._insert(cur_node.left, cur_node, new_node)
-        return cur_node
+class RedBlackTree(Generic[T]):
+    """A self-balancing binary search tree, usable as an ordered set.
 
-    def _find(self, cur_node: Node | None, val: int) -> bool:
-        if cur_node is None:
-            return None
-        if cur_node.key == val:
-            return cur_node
-        if cur_node.key < val:
-            return self._find(cur_node.right, val)
-        else:
-            return self._find(cur_node.left, val)
+    Invariants that keep the tree balanced:
 
-    def _right_rotate(self, node: Node) -> None:
-        assert node.left is not None
-        left_child = node.left
-        parent = node.parent
-        moved_subtree = left_child.right
-        left_child.parent = parent
+    1. Every node is red or black.
+    2. The root is black.
+    3. Every leaf (the shared ``_nil`` sentinel) is black.
+    4. A red node's children are black (no two reds in a row).
+    5. Every root-to-leaf path crosses the same number of black nodes.
 
-        if parent is not None:
-            if parent.left is node:
-                parent.left = left_child
-            else:
-                parent.right = left_child
-        else:
-            self._root = left_child
-        
-        node.parent = left_child
-        node.left = moved_subtree
-        if moved_subtree is not None:
-            moved_subtree.parent = node
-        left_child.right = node
-    
-    def _left_rotate(self, node: Node) -> None:
-        assert node.right is not None
-        right_child = node.right
-        parent = node.parent
-        moved_subtree = right_child.left
-        right_child.parent = parent
+    All leaves are a single shared black *sentinel* (``_nil``) rather than
+    ``None``. This gives every real node non-null children with a real
+    ``parent`` pointer, so insertion and deletion fix-ups never special-case
+    "off the edge of the tree". Only ``<`` is used to order keys, so any type
+    with ``__lt__`` works.
+    """
 
-        if parent is not None:
-            if parent.left is node:
-                parent.left = right_child
-            else:
-                parent.right = right_child
-        else:
-            self._root = right_child
+    def __init__(self, items: Iterable[T] | None = None) -> None:
+        # One shared sentinel stands in for every leaf; its key is never read.
+        self._nil: Node[T] = Node.__new__(Node)
+        self._nil.color = Color.BLACK
+        self._nil.parent = self._nil.left = self._nil.right = self._nil
+        self._root: Node[T] = self._nil
+        self._size = 0
+        if items is not None:
+            for item in items:
+                self.insert(item)
 
-        node.parent = right_child
-        node.right = moved_subtree
-        if moved_subtree is not None:
-            moved_subtree.parent = node
-        right_child.left = node
-        
-    def _balance_tree(self, node: Node) -> None:
-        if node.parent is None:
-            node.color = True
-            return
-        
-        if node.parent.color:
-            return
-        grand_parent = node.parent.parent
-        parent = node.parent
-        uncle = grand_parent.right if grand_parent.left is parent else grand_parent.left
-        
-        if uncle is not None and not uncle.color:
-            parent.color = True
-            uncle.color = True
-            grand_parent.color = False
-            self._balance_tree(grand_parent)
-        else:
-            if grand_parent.left is parent and parent.right is node:
-                self._left_rotate(parent)
-                parent, node = node, parent
-            elif grand_parent.right is parent and parent.left is node:
-                self._right_rotate(parent)
-                parent, node = node, parent
+    def __len__(self) -> int:
+        return self._size
 
-            if grand_parent.left is parent:
-                self._right_rotate(grand_parent)
-            elif grand_parent.right is parent:
-                self._left_rotate(grand_parent)
-            
-            parent.color = True
-            grand_parent.color = False
+    def __bool__(self) -> bool:
+        return self._size > 0
 
-    def insert(self, val: int) -> None:
-        node = self._find(self._root, val)
-        if node is None:
-            new_node = Node(val)
-            self._root = self._insert(self._root, None, new_node)
-            self._balance_tree(new_node)
-            self._root.color = True
+    def __contains__(self, key: object) -> bool:
+        return self._find(key) is not self._nil
 
-    def erase(self, val: int) -> None:
-        node = self._find(self._root, val)
-        if node is None:
-            return
-
-        to_delete = node
-        if node.right is not None:
-            cur_leftest = node.right
-            while cur_leftest is not None:
-                to_delete = cur_leftest
-                cur_leftest = cur_leftest.left
-        elif node.left is not None:
-            cur_rightest = node.left
-            while cur_rightest is not None:
-                to_delete = cur_rightest
-                cur_rightest = cur_rightest.right
-        
-        node.key = to_delete.key
-
-        to_delete_parent = to_delete.parent
-
-        if to_delete.right is not None or to_delete.left is not None:
-            replacement_node = to_delete.right or to_delete.left
-            if to_delete_parent.left is to_delete:
-                to_delete_parent.left = replacement_node
-            else:
-                to_delete_parent.right = replacement_node
-            replacement_node.parent = to_delete_parent
-            
-            if not to_delete.color:
+    def __iter__(self) -> Iterator[T]:
+        # In-order traversal yields keys in ascending order.
+        def walk(node: Node[T]) -> Iterator[T]:
+            if node is self._nil:
                 return
+            yield from walk(node.left)
+            yield node.key
+            yield from walk(node.right)
 
-            if not replacement_node.color:
-                replacement_node.color = True
-                return
-            
-            to_delete = replacement_node
+        return walk(self._root)
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}([{', '.join(map(repr, self))}])"
+
+    def insert(self, key: T) -> None:
+        """Add ``key``. No-op if it is already present (this is a set)."""
+        parent = self._nil
+        node = self._root
+        while node is not self._nil:
+            parent = node
+            if key < node.key:
+                node = node.left
+            elif node.key < key:
+                node = node.right
+            else:
+                return  # already present
+
+        new_node = Node(key, Color.RED, parent, self._nil, self._nil)
+        if parent is self._nil:
+            self._root = new_node
+        elif key < parent.key:
+            parent.left = new_node
         else:
-            if not to_delete.color:
-                to_delete = None
+            parent.right = new_node
 
-        # TODO Fix-up aka resolve double-black problem
-        
-        
+        self._size += 1
+        self._resolve_red_violation(new_node)
 
+    def erase(self, key: T) -> None:
+        """Remove ``key``. No-op if it is absent."""
+        node = self._find(key)
+        if node is self._nil:
+            return
+        self._size -= 1
 
+        # Reduce to deleting a node with at most one child: swap in the
+        # in-order successor's key, then delete the successor instead.
+        if node.left is not self._nil and node.right is not self._nil:
+            successor = self._minimum(node.right)
+            node.key = successor.key
+            node = successor
 
-        
-        
+        child = node.left if node.left is not self._nil else node.right
+        self._transplant(node, child)
 
+        # Removing a red node can't break any invariant. Removing a black one
+        # leaves its path a black short: an adopted red child just repaints
+        # black, otherwise the deficit ("double black") needs resolving.
+        if node.color is Color.BLACK:
+            if child.color is Color.RED:
+                child.color = Color.BLACK
+            else:
+                self._resolve_double_black(child)
+
+    def _find(self, key: object) -> Node[T]:
+        node = self._root
+        while node is not self._nil:
+            if key < node.key:  # type: ignore[operator]
+                node = node.left
+            elif node.key < key:  # type: ignore[operator]
+                node = node.right
+            else:
+                return node
+        return self._nil
+
+    def _minimum(self, node: Node[T]) -> Node[T]:
+        while node.left is not self._nil:
+            node = node.left
+        return node
+
+    def _transplant(self, node: Node[T], replacement: Node[T]) -> None:
+        # Splice `replacement` into `node`'s spot. `replacement` may be the
+        # sentinel; setting its parent is intentional so a "double black" on
+        # the sentinel can still find its way up during the delete fix-up.
+        parent = node.parent
+        if parent is self._nil:
+            self._root = replacement
+        elif node is parent.left:
+            parent.left = replacement
+        else:
+            parent.right = replacement
+        replacement.parent = parent
+
+    def _rotate(self, pivot: Node[T], to_left: bool) -> None:
+        # Rotate `pivot` down and its child up. `to_left` selects the
+        # direction; a left rotation pulls up the right child, and vice versa.
+        rising = pivot.right if to_left else pivot.left
+        assert rising is not self._nil
+
+        # The rising node's inner subtree swings over to become pivot's child.
+        inner = rising.left if to_left else rising.right
+        if to_left:
+            pivot.right = inner
+        else:
+            pivot.left = inner
+        if inner is not self._nil:
+            inner.parent = pivot
+
+        # Splice `rising` into pivot's former position.
+        rising.parent = pivot.parent
+        if pivot.parent is self._nil:
+            self._root = rising
+        elif pivot is pivot.parent.left:
+            pivot.parent.left = rising
+        else:
+            pivot.parent.right = rising
+
+        # Hang `pivot` beneath `rising`.
+        if to_left:
+            rising.left = pivot
+        else:
+            rising.right = pivot
+        pivot.parent = rising
+
+    def _resolve_red_violation(self, node: Node[T]) -> None:
+        # `node` is red and may clash with a red parent. Walk the violation
+        # upward, recoloring where the uncle is red and rotating where it isn't.
+        while node.parent.color is Color.RED:
+            parent = node.parent
+            grandparent = parent.parent
+            parent_is_left = parent is grandparent.left
+            uncle = grandparent.right if parent_is_left else grandparent.left
+
+            if uncle.color is Color.RED:
+                # Push blackness down from the grandparent; recurse upward.
+                parent.color = uncle.color = Color.BLACK
+                grandparent.color = Color.RED
+                node = grandparent
+            else:
+                # Straighten a "triangle" into a "line", then rotate the
+                # grandparent over and recolor.
+                if (node is parent.left) != parent_is_left:
+                    self._rotate(parent, parent_is_left)
+                    node, parent = parent, node
+                parent.color = Color.BLACK
+                grandparent.color = Color.RED
+                self._rotate(grandparent, not parent_is_left)
+
+        self._root.color = Color.BLACK
+
+    def _resolve_double_black(self, node: Node[T]) -> None:
+        # `node` carries one unit of surplus blackness. Shed it by borrowing
+        # from the sibling's subtree, or push it up toward the root.
+        while node is not self._root and node.color is Color.BLACK:
+            parent = node.parent
+            node_is_left = node is parent.left
+            sibling = parent.right if node_is_left else parent.left
+
+            # Case 1: red sibling. Rotate it up so `node` gets a black sibling,
+            # then fall through to one of the black-sibling cases below.
+            if sibling.color is Color.RED:
+                sibling.color = Color.BLACK
+                parent.color = Color.RED
+                self._rotate(parent, node_is_left)
+                sibling = parent.right if node_is_left else parent.left
+
+            near = sibling.left if node_is_left else sibling.right
+            far = sibling.right if node_is_left else sibling.left
+
+            if near.color is Color.BLACK and far.color is Color.BLACK:
+                # Case 2: sibling's children are both black. Repaint the
+                # sibling red and lift the deficit to the parent.
+                sibling.color = Color.RED
+                node = parent
+            else:
+                if far.color is Color.BLACK:
+                    # Case 3: only the near child is red. Rotate the sibling to
+                    # turn this into Case 4.
+                    near.color = Color.BLACK
+                    sibling.color = Color.RED
+                    self._rotate(sibling, not node_is_left)
+                    sibling = parent.right if node_is_left else parent.left
+                    far = sibling.right if node_is_left else sibling.left
+
+                # Case 4: the far child is red. One rotation settles the debt.
+                sibling.color = parent.color
+                parent.color = Color.BLACK
+                far.color = Color.BLACK
+                self._rotate(parent, node_is_left)
+                node = self._root  # done
+
+        node.color = Color.BLACK
